@@ -30,7 +30,7 @@ var serviceSubcommand = cli.Command{
 		cmds.ConfigFlag,
 		&cli.BoolFlag{
 			Name:  "add",
-			Usage: "add RKE2 as a Windows Service",
+			Usage: "add RKE2 as a Windows Servicexxx",
 		},
 		&cli.BoolFlag{
 			Name:  "delete",
