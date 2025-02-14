@@ -113,7 +113,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        dtest: [basics]
+        dtest: [basics, secretsencryption]
     steps:
       - name: "Checkout"
         uses: actions/checkout@v4
@@ -136,7 +136,7 @@ jobs:
       - name: Run ${{ matrix.dtest }} Test
         # Put the compiled test binary back in the same place as the test source
         run: |
-          go test -v ./tests/docker/${{ matrix.dtest }}/${{ matrix.dtest }}_test.go -ginkgo.v 
+          go test -v ./tests/docker/${{ matrix.dtest }}/${{ matrix.dtest }}_test.go -ginkgo.v -ci
   docker-large:
     name: "Docker Tests (Large)"
     needs: build
