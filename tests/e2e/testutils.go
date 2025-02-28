@@ -56,7 +56,11 @@ func (tc *TestConfig) Status() string {
 	if tc.Hardened {
 		hardened = "Hardened: true\n"
 	}
-	return fmt.Sprintf("%sKubeconfig: %s\nServers Nodes: %s\nAgents Nodes: %s\n)", hardened, tc.KubeconfigFile, sN, aN)
+	wN := ""
+	if len(tc.WindowsAgents) > 0 {
+		wN = fmt.Sprintf("Windows Agents: %s\n", strings.Join(VagrantSlice(tc.WindowsAgents), " "))
+	}
+	return fmt.Sprintf("%sKubeconfig: %s\nServers Nodes: %s\nAgents Nodes: %s\n%s)", hardened, tc.KubeconfigFile, sN, aN, wN)
 }
 
 type Node struct {
@@ -664,17 +668,17 @@ func StopCluster(nodes []VagrantNode) error {
 	return nil
 }
 
-func UpgradeCluster(serverNodenames []string, agentNodenames []string) error {
-	for _, nodeName := range serverNodenames {
-		cmd := "E2E_RELEASE_CHANNEL=commit vagrant provision " + nodeName
+func UpgradeCluster(servers []VagrantNode, agents []VagrantNode) error {
+	for _, server := range servers {
+		cmd := "E2E_RELEASE_CHANNEL=commit vagrant provision " + server.Name
 		fmt.Println(cmd)
 		if out, err := RunCommand(cmd); err != nil {
 			fmt.Println("Error Upgrading Cluster", out)
 			return err
 		}
 	}
-	for _, nodeName := range agentNodenames {
-		cmd := "E2E_RELEASE_CHANNEL=commit vagrant provision " + nodeName
+	for _, agent := range agents {
+		cmd := "E2E_RELEASE_CHANNEL=commit vagrant provision " + agent.Name
 		if _, err := RunCommand(cmd); err != nil {
 			fmt.Println("Error Upgrading Cluster", err)
 			return err
