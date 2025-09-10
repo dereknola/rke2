@@ -135,6 +135,26 @@ var _ = Describe("DualStack Tests", Ordered, func() {
 				}
 			}
 		})
+
+		It("Verifies podSelector Network Policy", func() {
+			_, err := tc.DeployWorkload("pod_client.yaml")
+			Expect(err).NotTo(HaveOccurred())
+			cmd := "kubectl exec svc/client-curl --kubeconfig=" + tc.KubeconfigFile + " -- curl -m7 ds-clusterip-svc/name.html"
+			Eventually(func() (string, error) {
+				return docker.RunCommand(cmd)
+			}, "20s", "3s").Should(ContainSubstring("ds-clusterip-pod"), "failed cmd: "+cmd)
+			_, err = tc.DeployWorkload("netpol-fail.yaml")
+			Expect(err).NotTo(HaveOccurred())
+			cmd = "kubectl exec svc/client-curl --kubeconfig=" + tc.KubeconfigFile + " -- curl -m7 ds-clusterip-svc/name.html"
+			_, err = docker.RunCommand(cmd)
+			Expect(err).To(HaveOccurred())
+			_, err = tc.DeployWorkload("netpol-work.yaml")
+			Expect(err).NotTo(HaveOccurred())
+			cmd = "kubectl exec svc/client-curl --kubeconfig=" + tc.KubeconfigFile + " -- curl -m7 ds-clusterip-svc/name.html"
+			Eventually(func() (string, error) {
+				return docker.RunCommand(cmd)
+			}, "20s", "3s").Should(ContainSubstring("ds-clusterip-pod"), "failed cmd: "+cmd)
+		})
 	})
 	Context("Validate dnscache feature", func() {
 		It("deploys nodecache daemonset", func() {
