@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
 
 cd $(dirname $0)/..
-
+echo "Cleaning build artifacts..."
 rm -rf bin dist build
