@@ -516,8 +516,8 @@ func searchForUnsupportedNginxAnnotations(manifestsDir string) error {
 		}
 		if len(matches) > 0 {
 			logrus.Errorf("--- Found %d matching annotations ---", len(matches))
-			for match, count := range matches {
-				logrus.Errorf("  - %s (found %d times)", match, count)
+			for match := range matches {
+				logrus.Errorf("  - %s", match)
 			}
 			return fmt.Errorf("unsupported ingress-nginx annotations found in manifest %s; please remove these annotations when using traefik as the ingress controller", fileName)
 		}
@@ -556,14 +556,14 @@ func loadEmbeddedAnnotationsSet(content string) (map[string]struct{}, error) {
 
 // findAllMatches scans a manifest file, finds all matches
 // against the matchSet, and returns a map of matches and their counts.
-func findAllMatches(path string, matchSet map[string]struct{}) (map[string]int, error) {
+func findAllMatches(path string, matchSet map[string]struct{}) (map[string]bool, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open manifest %s: %w", path, err)
 	}
 	defer file.Close()
 
-	foundMatches := make(map[string]int)
+	foundMatches := make(map[string]bool)
 
 	scanner := bufio.NewScanner(file)
 	scanner.Split(bufio.ScanWords)
@@ -577,7 +577,7 @@ func findAllMatches(path string, matchSet map[string]struct{}) (map[string]int, 
 
 		cleanWord = strings.ToLower(cleanWord)
 		if _, ok := matchSet[cleanWord]; ok {
-			foundMatches[cleanWord]++
+			foundMatches[cleanWord] = true
 		}
 	}
 

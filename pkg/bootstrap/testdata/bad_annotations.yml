@@ -1,0 +1,29 @@
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-with-nginx-annotation
+  namespace: default
+  annotations:
+    nginx.ingress.kubernetes.io/auth-keepalive-requests: "100"
+    nginx.ingress.kubernetes.io/canary: "true"
+    nginx.ingress.kubernetes.io/auth-secret: "default/basic-auth" # good annotation
+    nginx.ingress.kubernetes.io/enable-opentelemetry: "true"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "30s"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: whoami.localhost
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: whoami
+                port:
+                  number: 80
+  tls:
+    - hosts:
+        - whoami.localhost
+      secretName: external-certs
