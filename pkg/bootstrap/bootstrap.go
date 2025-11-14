@@ -1,8 +1,10 @@
 package bootstrap
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -220,6 +222,13 @@ func UpdateManifests(resolver *images.Resolver, ingressController string, nodeCo
 	// deploy controller will delete them if they are disabled.
 	if err := copyDir(manifestsDir, refChartsDir); err != nil {
 		return pkgerrors.WithMessage(err, "failed to copy runtime charts")
+	}
+
+	// Check for unsupport ingress-nginx configurations when using traefik
+	if ingressController == "traefik" {
+		if err := searchForUnsupportedNginxAnnotations(manifestsDir); err != nil {
+			return err
+		}
 	}
 
 	// Fix up HelmCharts to pass through configured values.
@@ -490,4 +499,110 @@ func getInjectDefault() bool {
 		return b
 	}
 	return injectDefault
+}
+
+// searchForUnsupportedNginxAnnotations scans all manifests in the given path
+// for unsupported ingress-nginx annotations, returning an error if any are found.
+func searchForUnsupportedNginxAnnotations(manifestsDir string) error {
+	matchSet, err := loadEmbeddedAnnotationsSet(embeddedAnnotationMatches)
+	if err != nil {
+		return fmt.Errorf("failed to load embedded unsupported ingress annotations: %w", err)
+	}
+
+	files := map[string]os.FileInfo{}
+	if err := filepath.Walk(manifestsDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		switch {
+		case info.IsDir():
+			return nil
+		case strings.HasSuffix(path, ".yml"):
+		case strings.HasSuffix(path, ".yaml"):
+		default:
+			return nil
+		}
+		files[path] = info
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	for fileName := range files {
+		matches, err := findAllMatches(fileName, matchSet)
+		if err != nil {
+			return fmt.Errorf("failed to scan manifest for unsupported ingress annotations: %w", err)
+		}
+		if len(matches) > 0 {
+			logrus.Errorf("--- Found %d matching annotations ---", len(matches))
+			for match, count := range matches {
+				logrus.Errorf("  - %s (found %d times)", match, count)
+			}
+			return fmt.Errorf("unsupported ingress-nginx annotations found in manifest %s; please remove these annotations when using traefik as the ingress controller", fileName)
+		}
+	}
+
+	logrus.Debug("No unsupported ingress-nginx annotations found.")
+	return nil
+}
+
+// These is a list of unsupported ingress-nginx annotations when using traefik.
+//
+//go:embed unsupported-ingress-annotations.txt
+var embeddedAnnotationMatches string
+
+// loadEmbeddedAnnotationsSet builds the map from the embedded file.
+func loadEmbeddedAnnotationsSet(content string) (map[string]struct{}, error) {
+	matchSet := make(map[string]struct{})
+
+	// Use a strings.Reader to treat the string as a file
+	reader := strings.NewReader(content)
+	scanner := bufio.NewScanner(reader)
+
+	for scanner.Scan() {
+		word := strings.ToLower(strings.TrimSpace(scanner.Text()))
+		if word != "" {
+			matchSet[word] = struct{}{}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("error scanning embedded annotations: %w", err)
+	}
+
+	return matchSet, nil
+}
+
+// findAllMatches scans a manifest file, finds all matches
+// against the matchSet, and returns a map of matches and their counts.
+func findAllMatches(path string, matchSet map[string]struct{}) (map[string]int, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open manifest %s: %w", path, err)
+	}
+	defer file.Close()
+
+	foundMatches := make(map[string]int)
+
+	scanner := bufio.NewScanner(file)
+	scanner.Split(bufio.ScanWords)
+
+	for scanner.Scan() {
+		word := scanner.Text()
+
+		// Clean the "word" of common trailing punctuation from YAML/JSON,
+		// this handles "nginx.ingress.kubernetes.io/rewrite-target:"
+		cleanWord := strings.TrimRight(word, `:"',`)
+
+		cleanWord = strings.ToLower(cleanWord)
+		if _, ok := matchSet[cleanWord]; ok {
+			foundMatches[cleanWord]++
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("error reading manifest %s: %w", path, err)
+	}
+
+	return foundMatches, nil
 }
