@@ -1,0 +1,60 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: myapp
+  annotations:
+    # These NGINX annotations are automatically translated by Traefik
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "https://example.com"
+    nginx.ingress.kubernetes.io/affinity: "cookie"
+    nginx.ingress.kubernetes.io/session-cookie-name: "route"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: myapp.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: basic-webserver
+                port:
+                  number: 80
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: basic-webserver
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: basic-webserver
+  template:
+    metadata:
+      labels:
+        app: basic-webserver
+    spec:
+      containers:
+        - name: testcontainer
+          image: rancher/mirrored-library-busybox:1.36.1
+          args: ['sh', '-c', 'echo Welcome to nginx! > index.html; hostname > name.html; httpd -vvf']
+          ports:
+          - containerPort: 80
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: basic-webserver
+spec:
+  selector:
+    app: basic-webserver
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
