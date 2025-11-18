@@ -117,16 +117,6 @@ var _ = Describe("Traefik Tests", Ordered, func() {
 apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig
 metadata:
-  name: rke2-ingress-nginx
-  namespace: kube-system
-spec:
-  valuesContent: |-
-    controller:
-      kind: Deployment
----
-apiVersion: helm.cattle.io/v1
-kind: HelmChartConfig
-metadata:
   name: rke2-traefik
   namespace: kube-system
 spec:
