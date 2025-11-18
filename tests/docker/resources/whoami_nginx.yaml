@@ -31,12 +31,29 @@ spec:
   selector:
     app: whoami
 ---
-# The "Legacy" Ingress
+kind: Secret
+apiVersion: v1
+metadata:
+  name: basic-auth
+  namespace: default
+type: Opaque
+data:
+  # user:password
+  auth: dXNlcjp7U0hBfVc2cGg1TW01UHo4R2dpVUxiUGd6RzM3bWo5Zz0=
+---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: whoami-nginx
   namespace: default
+  annotations:
+    # BASIC Authentication
+    nginx.ingress.kubernetes.io/auth-type: "basic"
+    nginx.ingress.kubernetes.io/auth-secret-type: "auth-file"
+    nginx.ingress.kubernetes.io/auth-secret: "default/basic-auth"
+    nginx.ingress.kubernetes.io/auth-realm: "Authentication Required"
+    # SSL Redirect
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
 spec:
   ingressClassName: "nginx" # Explicitly targeting nginx
   rules:
@@ -50,3 +67,7 @@ spec:
             name: whoami
             port:
               number: 80
+  tls:
+    - hosts:
+        - whoami.example.com
+      secretName: external-certs
