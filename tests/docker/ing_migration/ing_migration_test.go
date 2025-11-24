@@ -45,7 +45,7 @@ func Test_DockerTraefik(t *testing.T) {
 
 var _ = Describe("Traefik Tests", Ordered, func() {
 
-	Context("Setup Cluster", func() {
+	FContext("Setup Cluster", func() {
 		It("should provision servers and agents", func() {
 			var err error
 			tc, err = docker.NewTestConfig()
@@ -65,7 +65,7 @@ var _ = Describe("Traefik Tests", Ordered, func() {
 		})
 	})
 
-	Context("Validate various components", func() {
+	FContext("Validate various components", func() {
 		It("should deploy loadbalancer service", func() {
 			_, err := tc.DeployWorkload("loadbalancer.yaml")
 			Expect(err).NotTo(HaveOccurred(), "failed to apply loadbalancer manifest")
@@ -96,7 +96,7 @@ var _ = Describe("Traefik Tests", Ordered, func() {
 			}, "30s", "5s").Should(Succeed())
 		})
 	})
-	Context("Deploy sample ingress workload", func() {
+	FContext("Deploy sample ingress workload", func() {
 		It("should deploy web server and ingress", func() {
 			_, err := tc.DeployWorkload("whoami_nginx.yaml")
 			Expect(err).NotTo(HaveOccurred(), "failed to apply whoami ingress")
@@ -108,7 +108,7 @@ var _ = Describe("Traefik Tests", Ordered, func() {
 			}, "60s", "5s").Should(Succeed())
 		})
 	})
-	Context("Deploy traefik as a secondary ingress controller", func() {
+	FContext("Deploy traefik as a secondary ingress controller", func() {
 		It("restart rke2 with traefik ingress controller", func() {
 			newServerYaml := "ingress-controller: ingress-nginx,traefik"
 			Expect(replaceConfigYaml(newServerYaml, tc.Servers[0])).To(Succeed())
@@ -121,20 +121,14 @@ metadata:
   namespace: kube-system
 spec:
   valuesContent: |-
-    # Configure Ports to avoid Nginx Conflict
     ports:
       web:
-        port: 8000
-        exposedPort: 8000
-        protocol: TCP
-        nodePort: null
-        hostPort: 8000  # Temporary Transition Port
+        hostPort: 8000
       websecure:
-        port: 8443
-        exposedPort: 8443
-        protocol: TCP
-        nodePort: null
-        hostPort: 8443  # Temporary Transition Port
+        hostPort: 8443
+   additionalArguments:
+      - "--experimental.kubernetesIngressNGINX"
+      - "--providers.kubernetesIngressNGINX"
 `
 			Expect(docker.StageManifest(dualIngressManifest, tc.Servers[0])).To(Succeed())
 			Expect(docker.RestartCluster(append(tc.Servers, tc.Agents...))).To(Succeed())
@@ -151,8 +145,8 @@ spec:
 			Expect(res).To(MatchRegexp(`traefik\s+traefik\.io\/ingress-controller\s+false`), "traefik ingressclass not found")
 		})
 		It("should deploy traefik ingress workload", func() {
-			_, err := tc.DeployWorkload("whoami_traefik.yaml")
-			Expect(err).NotTo(HaveOccurred(), "failed to apply whoami traefik ingress")
+			res, err := tc.DeployWorkload("whoami_traefik.yaml")
+			Expect(err).NotTo(HaveOccurred(), "failed to apply whoami traefik ingress: "+res)
 			cmd := "curl -H 'Host: whoami.example.com' http://" + tc.Servers[0].IP + ":8000"
 
 			Eventually(func() error {
@@ -180,6 +174,12 @@ spec:
 	providers:
 	  kubernetesIngressNGINX:
 	    ingressClass: nginx
+    # Take over default ports 80 and 443
+    ports:
+      web:
+        hostPort: 80
+      websecure:
+        hostPort: 443
 `
 			Expect(docker.StageManifest(traefikManifest, tc.Servers[0])).To(Succeed())
 			Expect(docker.RestartCluster(append(tc.Servers, tc.Agents...))).To(Succeed())
