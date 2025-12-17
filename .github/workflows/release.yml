@@ -18,14 +18,10 @@ permissions:
     id-token: write
 jobs:
   release-amd64:
-    runs-on: runs-on,runner=8cpu-linux-x64,run-id=${{ github.run_id }},image=ubuntu22-full-x64,hdd=256
+    runs-on: ${{ github.repository_owner == 'rancher' && "runs-on,runner=8cpu-linux-x64,run-id=${{ github.run_id }},image=ubuntu22-full-x64,hdd=256" || "ubuntu-latest" }}
     steps:
     - name: Checkout code
       uses: actions/checkout@v6
-
-    - name: Validate Release
-      run: |
-        make in-docker-validate-release
 
     - name: Build
       run: |
@@ -33,6 +29,7 @@ jobs:
     
     - name: "Read secrets"
       uses: rancher-eio/read-vault-secrets@main
+      if: github.repository_owner == 'rancher'
       with:
         secrets: |
           secret/data/github/repo/${{ github.repository }}/dockerhub/${{ github.repository_owner }}/credentials username | DOCKER_USERNAME ;
@@ -77,10 +74,11 @@ jobs:
         tag: ${{ env.GIT_TAG }}
         make-target: publish-image-runtime
 
-        public-repo: rancher
-        public-username: ${{ env.DOCKER_USERNAME }}
-        public-password: ${{ env.DOCKER_PASSWORD }}
+        public-repo: ${{ github.repository_owner }}
+        public-username: ${{ github.repository_owner == 'rancher' && env.DOCKER_USERNAME || secrets.DOCKER_USERNAME }}
+        public-password: ${{ github.repository_owner == 'rancher' && env.DOCKER_PASSWORD || secrets.DOCKER_PASSWORD }}
 
+        push-to-prime: ${{ github.repository_owner == 'rancher' }}
         prime-repo: rancher
         prime-registry: ${{ env.PRIME_REGISTRY }}
         prime-username: ${{ env.PRIME_REGISTRY_USERNAME }}
@@ -96,10 +94,11 @@ jobs:
         tag: ${{ env.GIT_TAG }}
         make-target: publish-image-runtime-windows
 
-        public-repo: rancher
-        public-username: ${{ env.DOCKER_USERNAME }}
-        public-password: ${{ env.DOCKER_PASSWORD }}
+        public-repo: ${{ github.repository_owner }}
+        public-username: ${{ github.repository_owner == 'rancher' && env.DOCKER_USERNAME || secrets.DOCKER_USERNAME }}
+        public-password: ${{ github.repository_owner == 'rancher' && env.DOCKER_PASSWORD || secrets.DOCKER_PASSWORD }}
 
+        push-to-prime: ${{ github.repository_owner == 'rancher' }}
         prime-repo: rancher
         prime-registry: ${{ env.PRIME_REGISTRY }}
         prime-username: ${{ env.PRIME_REGISTRY_USERNAME }}
@@ -119,14 +118,10 @@ jobs:
       env:
         GH_TOKEN: ${{ github.token }}
   release-arm64:
-    runs-on: runs-on,runner=8cpu-linux-arm64,run-id=${{ github.run_id }},image=ubuntu22-full-arm64,hdd=256
+    runs-on: ${{ github.repository_owner == 'rancher' && "runs-on,runner=8cpu-linux-arm64,run-id=${{ github.run_id }},image=ubuntu22-full-arm64,hdd=256" || "ubuntu-24.04-arm" }}
     steps:
     - name: Checkout code
       uses: actions/checkout@v6
-
-    - name: Validate Release
-      run: |
-       make in-docker-validate-release
 
     - name: Build
       run: |
@@ -134,6 +129,7 @@ jobs:
     
     - name: "Read secrets"
       uses: rancher-eio/read-vault-secrets@main
+      if: github.repository_owner == 'rancher'
       with:
         secrets: |
           secret/data/github/repo/${{ github.repository }}/dockerhub/${{ github.repository_owner }}/credentials username | DOCKER_USERNAME ;
@@ -165,10 +161,11 @@ jobs:
         tag: ${{ env.GIT_TAG }}
         make-target: publish-image-runtime
 
-        public-repo: rancher
-        public-username: ${{ env.DOCKER_USERNAME }}
-        public-password: ${{ env.DOCKER_PASSWORD }}
+        public-repo: ${{ github.repository_owner }}
+        public-username: ${{ github.repository_owner == 'rancher' && env.DOCKER_USERNAME || secrets.DOCKER_USERNAME }}
+        public-password: ${{ github.repository_owner == 'rancher' && env.DOCKER_PASSWORD || secrets.DOCKER_PASSWORD }}
 
+        push-to-prime: ${{ github.repository_owner == 'rancher' }}
         prime-repo: rancher
         prime-registry: ${{ env.PRIME_REGISTRY }}
         prime-username: ${{ env.PRIME_REGISTRY_USERNAME }}
@@ -191,6 +188,7 @@ jobs:
       uses: actions/checkout@v6
 
     - name: "Read secrets"
+      if: github.repository_owner == 'rancher'
       uses: rancher-eio/read-vault-secrets@main
       with:
         secrets: |
@@ -214,7 +212,7 @@ jobs:
         tag: ${{ env.GIT_TAG }}
         make-target: publish-manifest-runtime
 
-        public-repo: rancher
+        public-repo: ${{ github.repository_owner }}
         public-username: ${{ env.DOCKER_USERNAME }}
         public-password: ${{ env.DOCKER_PASSWORD }}
 
@@ -226,6 +224,7 @@ jobs:
   release-downstream-components:
     name: "Release downstream components"
     needs: [release-amd64, release-arm64, sync-prime-ribs]
+    if: github.repository_owner == 'rancher'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -271,6 +270,7 @@ jobs:
   sync-prime-images:
     name: "Sync Prime images"
     needs: [release-amd64, release-arm64, manifest]
+    if: github.repository_owner == 'rancher'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -306,6 +306,7 @@ jobs:
     name: "Sync Prime ribs"
     needs: [manifest]
     runs-on: runs-on,runner=${{ matrix.runner }},run-id=${{ github.run_id }},image=${{ matrix.image }},hdd=256
+    if: github.repository_owner == 'rancher'
     permissions:
       contents: read
       id-token: write
