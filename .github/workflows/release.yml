@@ -22,6 +22,26 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v6
+    
+    - name: Remove unnecessary tools 
+      if: github.repository_owner != 'rancher'
+      run: |
+        sudo rm -rf \
+          /home/linuxbrew \
+          /home/packer \
+          /opt/az \
+          /opt/microsoft \
+          /usr/lib/firefox \
+          /usr/lib/google-cloud-sdk \
+          /usr/local/julia* \
+          /usr/local/share/boost \
+          /usr/local/share/chromium \
+          /usr/local/share/powershell \
+          /usr/share/az* \
+          /usr/share/dotnet \
+          /usr/share/miniconda \
+          /usr/share/swift
+        df -khl
 
     - name: Build
       run: |
