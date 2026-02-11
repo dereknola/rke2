@@ -138,6 +138,15 @@ spec:
 		})
 	})
 	Context("Test sample ingress workload via Traefik ports", func() {
+		It("should duplicate the myapp ingress for migration", func() {
+			cmd := "kubectl get ingress myapp --kubeconfig=" + tc.KubeconfigFile + " -o json | jq 'del(.metadata.resourceVersion, .metadata.uid, .metadata.creationTimestamp, .metadata.generation, .status)' > ingress-copy.json"
+			_, err := docker.RunCommand(cmd)
+			Expect(err).NotTo(HaveOccurred(), "failed to get myapp ingress resource")
+			cmd = "cat ingress-copy.json | jq '.metadata.name = \"myapp-traefik\" | .spec.ingressClassName = \"rke2-ingress-migration\"' | kubectl apply --kubeconfig=" + tc.KubeconfigFile + " -f -"
+			_, err = docker.RunCommand(cmd)
+			Expect(err).NotTo(HaveOccurred(), "failed to apply myapp-traefik ingress resource")
+			Expect(os.Remove("ingress-copy.json")).To(Succeed())
+		})
 		It("should return a 308 redirect when acceessing via node IP", func() {
 			cmd := "curl -H 'Host: myapp.example.com' http://" + tc.Servers[0].IP + ":8000"
 
