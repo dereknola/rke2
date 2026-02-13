@@ -4,12 +4,14 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/rancher/rke2/tests"
 	"github.com/rancher/rke2/tests/docker"
+	"golang.org/x/crypto/bcrypt"
 )
 
 var (
@@ -64,29 +66,86 @@ var _ = Describe("Traefik Tests", Ordered, func() {
 			}, "40s", "5s").Should(Succeed())
 		})
 	})
-	Context("Deploy sample ingress workload", func() {
-		It("should deploy web server and ingress", func() {
+	Context("Deploy all ingress workloads", func() {
+		It("should deploy web server and ingresses", func() {
 			_, err := tc.DeployWorkload("ingress_with_ann.yaml")
-			Expect(err).NotTo(HaveOccurred(), "failed to apply whoami ingress")
-		})
-		It("should return a 308 redirect when acceessing via node IP", func() {
-			cmd := "curl -H 'Host: myapp.example.com' http://" + tc.Servers[0].IP
+			Expect(err).NotTo(HaveOccurred())
+			_, err = tc.DeployWorkload("dummy_tls_secret.yaml")
+			Expect(err).NotTo(HaveOccurred())
 
+			hPass, err := bcrypt.GenerateFromPassword([]byte("itsASecret"), bcrypt.DefaultCost)
+			Expect(err).NotTo(HaveOccurred())
+
+			authFileContent := fmt.Sprintf("user:%s", hPass)
+			authFilePath := tc.TestDir + "/auth_file.txt"
+			Expect(os.WriteFile(authFilePath, []byte(authFileContent), 0644)).To(Succeed())
+
+			cmd := fmt.Sprintf("kubectl create secret generic basic-auth-secret --from-file=auth=%s -n test-migration --kubeconfig=%s", authFilePath, tc.KubeconfigFile)
+			_, err = docker.RunCommand(cmd)
+			Expect(err).NotTo(HaveOccurred(), "failed to create basic-auth-secret")
+			Expect(os.Remove(authFilePath)).To(Succeed())
+
+		})
+		It("should return 200 on a simple app via node IP", func() {
+			cmd := "curl -s -o /dev/null --max-time 10 -w '%{http_code}' -H 'Host: simple.example.com' http://" + tc.Servers[0].IP
 			Eventually(func() (string, error) {
-				return tc.Servers[0].RunCmdOnNode(cmd)
-			}, "60s", "5s").Should(ContainSubstring("308 Permanent Redirect"))
+				return docker.RunCommand(cmd)
+			}, "30s", "5s").Should(Equal("200"), "failed to curl simple.example.com")
 		})
-		It("should be accessible via ClusterIP", func() {
-			cmd := "kubectl get svc basic-webserver -o jsonpath='{.spec.clusterIP}' --kubeconfig=" + tc.KubeconfigFile
-			clusterIP, err := docker.RunCommand(cmd)
-			Expect(err).NotTo(HaveOccurred(), "failed to get clusterIP:"+clusterIP)
-
-			cmd = "curl -H 'Host: myapp.example.com' http://" + clusterIP
-			res, err := tc.Servers[0].RunCmdOnNode(cmd)
-			Expect(err).NotTo(HaveOccurred(), "failed to curl clusterIP:"+res)
-			Expect(res).To(ContainSubstring("Welcome to nginx!"))
+		It("should return 401 for auth endpoint without credentials", func() {
+			cmd := "curl -s -o /dev/null --max-time 10 -w '%{http_code}' -H 'Host: auth.example.com' http://" + tc.Servers[0].IP
+			Eventually(func() (string, error) {
+				return docker.RunCommand(cmd)
+			}, "30s", "5s").Should(Equal("401"))
 		})
+		It("should return 200 for auth endpoint with valid credentials", func() {
+			cmd := "curl -s -o /dev/null --max-time 10 -w '%{http_code}' -u 'user:itsASecret' -H 'Host: auth.example.com' http://" + tc.Servers[0].IP
+			Eventually(func() (string, error) {
+				return docker.RunCommand(cmd)
+			}, "30s", "5s").Should(Equal("200"), "failed to curl auth.example.com with credentials")
+		})
+		It("should rewrite paths correctly", func() {
+			cmd := "curl -s -o /dev/null --max-time 10 -w '%{http_code}' -H 'Host: nonworking.rewrite.example.com' http://" + tc.Servers[0].IP + "/app/test"
+			Eventually(func() (string, error) {
+				return docker.RunCommand(cmd)
+			}, "30s", "5s").Should(Equal("200"), "failed to curl rewrite endpoin")
+		})
+		It("should maintain session affinity with cookies", func() {
+			// Get initial response and extract hostname
+			cookieFile := tc.TestDir + "/cookie-jar.txt"
+			cmd := "curl -s -i -c " + cookieFile + " -H 'Host: cookie.example.com' http://" + tc.Servers[0].IP
+			initialRes, err := docker.RunCommand(cmd)
+			Expect(err).NotTo(HaveOccurred(), "failed to get initial cookie response: "+initialRes)
 
+			// Verify initial response contains Hostname
+			Expect(initialRes).To(MatchRegexp(`Hostname:\s+\w+`))
+
+			// Extract initial hostname
+			initialHostnameCmd := "curl -s -i -c " + cookieFile + " -H 'Host: cookie.example.com' http://" + tc.Servers[0].IP + " | grep 'Hostname:'"
+			initialHostname, err := docker.RunCommand(initialHostnameCmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Make 5 requests using the cookie jar and verify same hostname is returned
+			for range 5 {
+				cmd := "curl -s -b " + cookieFile + " -H 'Host: cookie.example.com' http://" + tc.Servers[0].IP + " | grep 'Hostname:'"
+				res, err := docker.RunCommand(cmd)
+				Expect(err).NotTo(HaveOccurred(), "failed to curl with cookie jar:"+res)
+				Expect(res).To(Equal(initialHostname), "hostname changed, session affinity not working")
+			}
+			Expect(os.Remove(cookieFile)).To(Succeed())
+		})
+		It("should return 308 redirect for SSL redirect annotation", func() {
+			cmd := "curl -s -o /dev/null --max-time 10 -w '%{http_code}' -H 'Host: ssl.redirect.example.com' http://" + tc.Servers[0].IP + "/"
+			Eventually(func() (string, error) {
+				return docker.RunCommand(cmd)
+			}, "30s", "5s").Should(Equal("308"), "failed to curl ssl.redirect.example.com")
+		})
+		It("should handle upstream vhost annotations", func() {
+			cmd := "curl -s -H 'Host: nonworking.upstreamvhost.example.com' http://" + tc.Servers[0].IP + "/"
+			res, err := docker.RunCommand(cmd)
+			Expect(err).NotTo(HaveOccurred(), "failed to curl upstreamvhost endpoint:"+res)
+			Expect(res).To(ContainSubstring("isitworking"))
+		})
 	})
 	Context("Deploy traefik as a secondary ingress controller", func() {
 		It("should assign nginx ingressClassName to all existing ingress resources", func() {
@@ -97,7 +156,11 @@ var _ = Describe("Traefik Tests", Ordered, func() {
 			cmd = "kubectl get ingress --all-namespaces --no-headers -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,ICLASS:.spec.ingressClassName' --kubeconfig=" + tc.KubeconfigFile
 			res, err := docker.RunCommand(cmd)
 			Expect(err).NotTo(HaveOccurred(), "failed to get ingress resources:"+res)
-			Expect(res).To(ContainSubstring("default   myapp   nginx"))
+			resArray := strings.Split(res, "\n")
+			// Last entry is always an empty string
+			resArray = resArray[:len(resArray)-1]
+			Expect(resArray).To(HaveLen(6))
+			Expect(resArray).To(HaveEach(ContainSubstring("nginx")))
 		})
 		It("restart rke2 with traefik ingress controller", func() {
 			newServerYaml := "ingress-controller:\n  - ingress-nginx\n  - traefik"
@@ -138,33 +201,80 @@ spec:
 		})
 	})
 	Context("Test sample ingress workload via Traefik ports", func() {
-		It("should duplicate the myapp ingress for migration", func() {
-			cmd := "kubectl get ingress myapp --kubeconfig=" + tc.KubeconfigFile + " -o json | jq 'del(.metadata.resourceVersion, .metadata.uid, .metadata.creationTimestamp, .metadata.generation, .status)' > ingress-copy.json"
-			_, err := docker.RunCommand(cmd)
-			Expect(err).NotTo(HaveOccurred(), "failed to get myapp ingress resource")
-			cmd = "cat ingress-copy.json | jq '.metadata.name = \"myapp-traefik\" | .spec.ingressClassName = \"rke2-ingress-migration\"' | kubectl apply --kubeconfig=" + tc.KubeconfigFile + " -f -"
-			_, err = docker.RunCommand(cmd)
-			Expect(err).NotTo(HaveOccurred(), "failed to apply myapp-traefik ingress resource")
-			Expect(os.Remove("ingress-copy.json")).To(Succeed())
-		})
-		It("should return a 308 redirect when acceessing via node IP", func() {
-			cmd := "curl -H 'Host: myapp.example.com' http://" + tc.Servers[0].IP + ":8000"
+		It("should duplicate the ingresses for migration", func() {
 
+			ingresses := []string{"simple", "auth", "cookie", "nonworking-rewrite", "ssl-redirect", "upstream-vhost"}
+
+			for _, ingressName := range ingresses {
+				cmd := "kubectl get ingress " + ingressName + " -n test-migration --kubeconfig=" + tc.KubeconfigFile + " -o json | jq 'del(.metadata.resourceVersion, .metadata.uid, .metadata.creationTimestamp, .metadata.generation, .status)' > ingress-" + ingressName + ".json"
+				_, err := docker.RunCommand(cmd)
+				Expect(err).NotTo(HaveOccurred(), "failed to get "+ingressName+" ingress resource")
+				cmd = "cat ingress-" + ingressName + ".json | jq '.metadata.name = \"" + ingressName + "-traefik\" | .spec.ingressClassName = \"rke2-ingress-nginx-migration\"' | kubectl apply --kubeconfig=" + tc.KubeconfigFile + " -f -"
+				_, err = docker.RunCommand(cmd)
+				Expect(err).NotTo(HaveOccurred(), "failed to apply "+ingressName+"-traefik ingress resource")
+				Expect(os.Remove("ingress-" + ingressName + ".json")).To(Succeed())
+			}
+		})
+		It("should return 200 on a simple app via node IP", func() {
+			cmd := "curl -s -o /dev/null --max-time 10 -w '%{http_code}' -H 'Host: simple.example.com' http://" + tc.Servers[0].IP + ":8000"
 			Eventually(func() (string, error) {
-				return tc.Servers[0].RunCmdOnNode(cmd)
-			}, "60s", "5s").Should(ContainSubstring("308 Permanent Redirect"))
+				return docker.RunCommand(cmd)
+			}, "30s", "5s").Should(Equal("200"), "failed to curl simple.example.com")
 		})
-		It("should be accessible via ClusterIP", func() {
-			cmd := "kubectl get svc basic-webserver -o jsonpath='{.spec.clusterIP}' --kubeconfig=" + tc.KubeconfigFile
-			clusterIP, err := docker.RunCommand(cmd)
-			Expect(err).NotTo(HaveOccurred(), "failed to get clusterIP:"+clusterIP)
-
-			cmd = "curl -H 'Host: myapp.example.com' http://" + clusterIP + ":8000"
-			res, err := tc.Servers[0].RunCmdOnNode(cmd)
-			Expect(err).NotTo(HaveOccurred(), "failed to curl clusterIP:"+res)
-			Expect(res).To(ContainSubstring("Welcome to nginx!"))
+		It("should return 401 for auth endpoint without credentials", func() {
+			cmd := "curl -s -o /dev/null --max-time 10 -w '%{http_code}' -H 'Host: auth.example.com' http://" + tc.Servers[0].IP + ":8000"
+			Eventually(func() (string, error) {
+				return docker.RunCommand(cmd)
+			}, "30s", "5s").Should(Equal("401"))
 		})
+		It("should return 200 for auth endpoint with valid credentials", func() {
+			cmd := "curl -s -o /dev/null --max-time 10 -w '%{http_code}' -u 'user:itsASecret' -H 'Host: auth.example.com' http://" + tc.Servers[0].IP + ":8000"
+			Eventually(func() (string, error) {
+				return docker.RunCommand(cmd)
+			}, "30s", "5s").Should(Equal("200"), "failed to curl auth.example.com with credentials")
+		})
+		It("should rewrite paths correctly", func() {
+			cmd := "curl -s -o /dev/null --max-time 10 -w '%{http_code}' -H 'Host: nonworking.rewrite.example.com' http://" + tc.Servers[0].IP + ":8000/app/test"
+			Eventually(func() (string, error) {
+				return docker.RunCommand(cmd)
+			}, "30s", "5s").Should(Equal("200"), "failed to curl rewrite endpoin")
+		})
+		It("should maintain session affinity with cookies", func() {
+			// Get initial response and extract hostname
+			cookieFile := tc.TestDir + "/cookie-jar.txt"
+			cmd := "curl -s -i -c " + cookieFile + " -H 'Host: cookie.example.com' http://" + tc.Servers[0].IP + ":8000"
+			initialRes, err := docker.RunCommand(cmd)
+			Expect(err).NotTo(HaveOccurred(), "failed to get initial cookie response: "+initialRes)
 
+			// Verify initial response contains Hostname
+			Expect(initialRes).To(MatchRegexp(`Hostname:\s+\w+`))
+
+			// Extract initial hostname
+			initialHostnameCmd := "curl -s -i -c " + cookieFile + " -H 'Host: cookie.example.com' http://" + tc.Servers[0].IP + ":8000 | grep 'Hostname:'"
+			initialHostname, err := docker.RunCommand(initialHostnameCmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Make 5 requests using the cookie jar and verify same hostname is returned
+			for range 5 {
+				cmd := "curl -s -b " + cookieFile + " -H 'Host: cookie.example.com' http://" + tc.Servers[0].IP + ":8000 | grep 'Hostname:'"
+				res, err := docker.RunCommand(cmd)
+				Expect(err).NotTo(HaveOccurred(), "failed to curl with cookie jar:"+res)
+				Expect(res).To(Equal(initialHostname), "hostname changed, session affinity not working")
+			}
+			Expect(os.Remove(cookieFile)).To(Succeed())
+		})
+		It("should return 308 redirect for SSL redirect annotation", func() {
+			cmd := "curl -s -o /dev/null --max-time 10 -w '%{http_code}' -H 'Host: ssl.redirect.example.com' http://" + tc.Servers[0].IP + ":8000/"
+			Eventually(func() (string, error) {
+				return docker.RunCommand(cmd)
+			}, "30s", "5s").Should(Equal("308"), "failed to curl ssl.redirect.example.com")
+		})
+		It("should not handle upstream vhost annotations", func() {
+			cmd := "curl -s -H 'Host: nonworking.upstreamvhost.example.com' http://" + tc.Servers[0].IP + ":8000/"
+			res, err := docker.RunCommand(cmd)
+			Expect(err).To(HaveOccurred(), "failed to curl upstreamvhost endpoint:"+res)
+			Expect(res).To(ContainSubstring("isitworking"))
+		})
 	})
 	Context("Switch to traefik as the default ingress controller", func() {
 		It("restart rke2 with traefik as default ingress controller", func() {
@@ -199,24 +309,37 @@ spec:
 			Expect(res).NotTo(MatchRegexp(`nginx\s+k8s\.io\/ingress-nginx`), "ingress-nginx ingressclass was still found")
 			Expect(res).To(MatchRegexp(`traefik\s+traefik\.io\/ingress-controller\s+true`), "traefik ingressclass not found or not marked default")
 		})
-		// It("should handle existing ingress-nginx annotations on ingress resources", func() {
-		// 	cmd := "curl -u 'user:password' --location-trusted -H 'Host: whoami.example.com' http://" + tc.Servers[0].IP
-		// 	Eventually(func() error {
-		// 		_, err := tc.Servers[0].RunCmdOnNode(cmd)
-		// 		return err
-		// 	}, "60s", "5s").Should(Succeed())
-		// })
-		It("should takeover existing ingress resources", func() {
-			cmd := "curl -H 'Host: myapp.example.com' http://" + tc.Servers[0].IP + ":80"
-			Eventually(func() error {
-				_, err := tc.Servers[0].RunCmdOnNode(cmd)
-				return err
-			}, "60s", "5s").Should(Succeed())
+	})
+	Context("traefik takes over original ingress resources", func() {
+		It("should return 200 on a simple app via node IP", func() {
+			cmd := "curl -s -o /dev/null --max-time 10 -w '%{http_code}' -H 'Host: simple.example.com' http://" + tc.Servers[0].IP
+			res, err := docker.RunCommand(cmd)
+			Expect(err).NotTo(HaveOccurred(), "failed to curl simple.example.com: "+res)
+			Expect(res).To(Equal("200"))
+		})
+		It("should return 401 for auth endpoint without credentials", func() {
+			cmd := "curl -s -o /dev/null --max-time 10 -w '%{http_code}' -H 'Host: auth.example.com' http://" + tc.Servers[0].IP
+			res, err := docker.RunCommand(cmd)
+			Expect(err).NotTo(HaveOccurred(), "failed to curl auth.example.com: "+res)
+			Expect(res).To(Equal("401"))
+		})
+		It("should return 200 for auth endpoint with valid credentials", func() {
+			cmd := "curl -s -o /dev/null --max-time 10 -w '%{http_code}' -u 'user:itsASecret' -H 'Host: auth.example.com' http://" + tc.Servers[0].IP
+			res, err := docker.RunCommand(cmd)
+			Expect(err).NotTo(HaveOccurred(), "failed to curl auth.example.com with credentials: "+res)
+			Expect(res).To(Equal("200"))
 		})
 	})
-	// Context("Cleanup existing ingress resources", func() {
-	// 	It("should remove all existing nginx objects", func() {
-
+	Context("Cleanup migration ingress resources", func() {
+		It("should remove all XXXX-traefik objects", func() {
+			ingresses := []string{"simple", "auth", "cookie", "nonworking-rewrite", "ssl-redirect", "upstream-vhost"}
+			for _, ing := range ingresses {
+				cmd := "kubectl delete ingress " + ing + "-traefik -n test-migration --kubeconfig=" + tc.KubeconfigFile
+				_, err := docker.RunCommand(cmd)
+				Expect(err).NotTo(HaveOccurred())
+			}
+		})
+	})
 })
 
 var failed bool
